@@ -1,0 +1,288 @@
+Plan for Node.js Service ApplicationThis document outlines a solution plan for creating a Node.js service application using Express.js for the web framework, Keyv for data storage abstraction (with Redis as the underlying store), TypeScript for type safety, and Jest for unit testing.1. Project Initialization & SetupThis phase involves setting up the basic project structure and installing necessary dependencies.Initialize Node.js Project:mkdir cms-backend-service
+cd cms-backend-service
+npm init -y
+
+
+
+Install Core Dependencies:npm install express keyv @keyv/redis
+
+
+
+Install Development Dependencies (TypeScript, Jest):npm install -D typescript ts-node @types/node @types/express @types/jest ts-jest jest
+
+
+
+Initialize TypeScript:npx tsc --init
+
+
+
+Configure tsconfig.json (see Section 3.3).Configure Jest:npx ts-jest config:init
+
+
+
+Configure jest.config.js (see Section 3.4).2. Directory StructureA clean and organized directory structure is crucial for maintainability.cms-backend-service/
+├── src/
+│   ├── controllers/    # Request handlers for routes
+│   │   ├── authController.ts
+│   │   ├── contentController.ts
+│   │   └── userController.ts
+│   ├── services/       # Business logic, interacts with data layer
+│   │   ├── authService.ts
+│   │   ├── contentService.ts
+│   │   └── userService.ts
+│   ├── data/           # Data access layer (Keyv/Redis interactions)
+│   │   ├── keyvStore.ts
+│   │   └── models.ts   # Data models (TypeScript interfaces/types)
+│   ├── routes/         # API route definitions
+│   │   ├── authRoutes.ts
+│   │   ├── contentRoutes.ts
+│   │   └── userRoutes.ts
+│   ├── middleware/     # Custom Express middleware (e.g., auth, error handling)
+│   │   ├── authMiddleware.ts
+│   │   └── errorHandler.ts
+│   ├── utils/          # Utility functions
+│   │   ├── logger.ts
+│   │   └── validation.ts # Input validation schemas/functions
+│   ├── app.ts          # Express application setup
+│   └── server.ts       # Server entry point
+├── tests/
+│   ├── unit/           # Unit tests for controllers, services, data
+│   │   ├── authService.test.ts
+│   │   ├── contentService.test.ts
+│   │   └── userService.test.ts
+│   ├── integration/    # Integration tests (optional for this plan, but good practice)
+│   │   ├── authRoutes.test.ts    # Integration tests for auth routes
+│   │   ├── contentRoutes.test.ts # Integration tests for content routes
+│   │   └── userRoutes.test.ts    # Integration tests for user routes
+│   ├── fixtureData.ts  # Test data fixtures for unit and integration tests
+├── .env                # Environment variables
+├── tsconfig.json
+├── jest.config.js
+├── package.json
+├── package-lock.json
+└── README.md
+3. Core Components & Configuration3.1. Express Application (src/app.ts)Server Setup: Initialize Express, define basic middleware (JSON parsing, URL encoding).Route Registration: Import and register API routes.Global Error Handling: Implement a catch-all error middleware.3.2. Data Storage with Keyv (src/data/keyvStore.ts)Keyv Initialization:import Keyv from 'keyv';
+import { KeyvRedis } from '@keyv/redis';
+import dotenv from 'dotenv';
+dotenv.config();
+
+const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+const keyv = new Keyv({ store: new KeyvRedis(redisUrl) });
+
+keyv.on('error', err => console.error('Keyv connection error:', err));
+
+export const contentStore = keyv; // Example: store for content
+export const userStore = new Keyv({ store: new KeyvRedis(redisUrl), namespace: 'users' }); // Example: separate namespace for users
+
+
+
+Data Access Functions: Create wrapper functions for common operations (e.g., get, set, delete, has).Data Models (src/data/models.ts):This file will define all TypeScript interfaces and types for the data entities managed by the CMS, such as Content, User, Team, etc. These models will be used across services and controllers to ensure type safety and consistency.Example:export interface BaseModel {
+    key: string; // Unique identifier for the entity in the Key/Value store
+    version: number; // For pessimistic locking, increments on update
+    createdAt: number; // Millisecond timestamp of creation
+    updatedAt: number; // Millisecond timestamp of last update
+    status: string; // e.g., 'active', 'inactive', 'archived', 'deleted', 'draft', 'published'
+}
+
+export interface Content extends BaseModel {
+    title: string;
+    body: string;
+    authorKey: string;
+    category: string;
+    tags: string[];
+    permissions: {
+        read: string[]; // User Keys or Role Keys
+        edit: string[];
+    };
+}
+
+export interface User extends BaseModel {
+    firstName: string;
+    lastName: string;
+    email: string;
+    roles: string[]; // e.g., 'admin', 'content_creator', 'viewer'
+    teamKeys: string[];
+    lastLogin: number; // Millisecond timestamp of last login
+}
+
+export interface Team extends BaseModel {
+    name: string;
+    memberKeys: string[];
+    // ... other team properties
+}
+
+
+3.3. TypeScript Configuration (tsconfig.json)target: es2020 or higher for modern JS features.module: commonjs or esnext (adjust for your module system preference).outDir: ./dist for compiled JavaScript.rootDir: ./src for source files.esModuleInterop: true for better interoperability with CommonJS modules.strict: true for strict type checking.skipLibCheck: true to skip type checking of declaration files.3.4. Jest Unit Test Framework (jest.config.js)preset: ts-jest for TypeScript support.testEnvironment: node.testMatch: ["**/tests/**/*.test.ts"] to find test files.collectCoverage: true (optional) for code coverage reports.coverageDirectory: coverage (optional).4. API Endpoints & Business Logic4.1. Routes (src/routes/contentRoutes.ts)Define API routes using Express Router.Map routes to controller functions.Example:import { Router } from 'express';
+import { getContent, createContent, updateContent, deleteContent } from '../controllers/contentController';
+import { authenticate } from '../middleware/authMiddleware';
+
+const router = Router();
+
+router.get('/content/:key', getContent); // Changed from :id to :key
+router.post('/content', authenticate, createContent);
+router.put('/content/:key', authenticate, updateContent); // Changed from :id to :key
+router.delete('/content/:key', authenticate, deleteContent); // Changed from :id to :key
+
+export default router;
+
+
+
+4.2. Controllers (src/controllers/contentController.ts)Handle incoming requests, validate input (using utils/validation.ts).Call appropriate service methods.Send responses.Example:import { Request, Response, NextFunction } from 'express';
+import * as contentService from '../services/contentService';
+import { validateContentInput } from '../utils/validation'; // Import validation
+
+export const getContent = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const contentKey = req.params.key; // Changed from contentId to contentKey
+        const content = await contentService.findByKey(contentKey); // Changed from findById to findByKey
+        if (!content) {
+            return res.status(404).json({ message: 'Content not found' });
+        }
+        res.json(content);
+    } catch (error) {
+        next(error); // Pass error to global error handler
+    }
+};
+
+export const createContent = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        // Validate request body
+        const { error, value } = validateContentInput(req.body);
+        if (error) {
+            return res.status(400).json({ message: error.details[0].message });
+        }
+
+        // Assume req.user is populated by authMiddleware
+        const now = Date.now();
+        const newContent = {
+            ...value,
+            authorKey: req.user.key,
+            key: now.toString(), // Example Key generation
+            version: 1, // Initial version
+            createdAt: now,
+            updatedAt: now,
+            status: 'draft', // Default status for new content
+        };
+        await contentService.create(newContent);
+        res.status(201).json({ message: 'Content created successfully', key: newContent.key }); // Changed from id to key
+    } catch (error) {
+        next(error);
+    }
+};
+// ... other controller methods
+4.3. Services (src/services/contentService.ts)Contain the core business logic.Interact with the data layer (Keyv store).Example:import { contentStore } from '../data/keyvStore';
+import { Content } from '../data/models'; // Import Content model
+
+export const findByKey = async (key: string): Promise<Content | undefined> => { // Changed from findById to findByKey, id to key
+    const content = await contentStore.get(key); // Changed from id to key
+    return content ? JSON.parse(content) : undefined; // Keyv stores strings
+};
+
+export const create = async (content: Content): Promise<void> => {
+    await contentStore.set(content.key, JSON.stringify(content)); // Changed from content.id to content.key
+};
+// ... other service methods
+Validation (src/utils/validation.ts):This file will contain schemas and functions for validating incoming request data (e.g., using a library like Joi or Zod).Example using a hypothetical validation library:// utils/validation.ts
+// Assuming a validation library like Joi or Zod is used
+// For simplicity, this is a placeholder. You'd install and configure a library.
+
+// Example using Joi (install 'joi' npm package)
+import Joi from 'joi';
+import { Content } from '../data/models';
+
+// Base schema for common model properties
+export const baseModelSchema = Joi.object({
+    key: Joi.string().optional(),
+    version: Joi.number().optional(),
+    createdAt: Joi.number().optional(),
+    updatedAt: Joi.number().optional(),
+    status: Joi.string().optional(), // Status is optional on input, will be set by backend
+});
+
+export const contentSchema = Joi.object<Content>({
+    title: Joi.string().min(3).max(255).required(),
+    body: Joi.string().required(),
+    authorKey: Joi.string().required(),
+    category: Joi.string().required(),
+    tags: Joi.array().items(Joi.string()).default([]),
+    permissions: Joi.object({
+        read: Joi.array().items(Joi.string()).default([]),
+        edit: Joi.array().items(Joi.string()).default([]),
+    }).default({ read: [], edit: [] }),
+}).concat(baseModelSchema); // Concat with base model schema
+
+export const validateContentInput = (data: any) => {
+    return contentSchema.validate(data, { abortEarly: false });
+};
+
+// Add schemas for User, Team, etc., also concatenating with baseModelSchema
+5. Authentication & Authorization (OAuth 2.0)Middleware (src/middleware/authMiddleware.ts):Intercept requests to protected routes.Validate OAuth 2.0 access tokens (e.g., JWT verification).Extract user information from the token and attach it to the request object (req.user).If token is invalid or missing, send 401 Unauthorized.User Data in Redis: User profiles and roles (from OAuth provider) can be cached in Redis for quick access, linked by a unique user ID.6. Error Handling (src/middleware/errorHandler.ts)Implement a centralized error handling middleware.Catch errors passed from controllers/services.Log errors for debugging.Send appropriate HTTP status codes and error messages to the client (avoid leaking sensitive information).7. Testing with JestUnit Tests:Test individual functions/modules in isolation (e.g., contentService.ts methods, utility functions).Mock dependencies (e.g., mock keyvStore in service tests).Integration Tests:Test the interaction between multiple components (e.g., controller and service, or routes and controllers).Use Supertest for testing Express routes to simulate HTTP requests.tests/integration/authRoutes.test.ts: Test authentication-related API endpoints (e.g., login, token validation).tests/integration/contentRoutes.test.ts: Test content-related API endpoints (e.g., create, read, update, delete content).tests/integration/userRoutes.test.ts: Test user/team management API endpoints (e.g., create user, get user profile, manage teams).Test Data Fixtures (tests/fixtureData.ts):This file will provide reusable test data (fixtures) for both unit and integration tests. This ensures consistency and makes tests easier to write and maintain.Example:// tests/fixtureData.ts
+import { Content, User } from '../src/data/models';
+
+export const mockUser: User = {
+    key: 'user123',
+    firstName: 'John',
+    lastName: 'Doe',
+    email: 'john.doe@example.com',
+    roles: ['content_creator'],
+    teamKeys: ['teamA'],
+    version: 1,
+    createdAt: Date.now(),
+    updatedAt: Date.now(), // Added for BaseModel
+    lastLogin: Date.now(),
+    status: 'active', // Added for BaseModel
+};
+
+export const mockContent: Content = {
+    key: 'content456',
+    title: 'My First Document',
+    body: 'This is the body of my first document.',
+    authorKey: 'user123',
+    category: 'General',
+    tags: ['draft', 'internal'],
+    version: 1,
+    createdAt: Date.now(),
+    updatedAt: Date.now(), // Added for BaseModel
+    status: 'draft', // Added for BaseModel
+    permissions: {
+        read: ['teamA'],
+        edit: ['user123'],
+    },
+};
+
+// Add more mock data as needed
+
+Running Tests:npm test
+
+
+
+Add a script to package.json: "test": "jest"GitHub Actions Workflow for Testing:Create a .github/workflows/ci.yml file in your repository.Define a workflow that triggers on push/pull request.Set up Node.js environment.Install dependencies.Run Jest tests.Example basic workflow:name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Use Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '24' # Set to Node.js version 24
+        # Note: actions/setup-node@v3 will attempt to download and install Node.js 24.
+        # If '24' is not yet pre-cached on the runner, it will be downloaded.
+        # You can also use 'lts/*' for the latest LTS version, or a specific full version like '24.0.0'.
+    - name: Install dependencies
+      run: npm install
+    - name: Run tests
+      run: npm test
+
+
+8. Deployment Considerations (DigitalOcean)Containerization (Docker): Package the Node.js application into a Docker image for consistent deployment.DigitalOcean Droplets/App Platform:Droplets: Deploy the Docker container to a Droplet (VM). Manage Redis (Valkey) either as a separate Droplet or use DigitalOcean Managed Databases for Redis.App Platform: Use DigitalOcean App Platform for managed deployment of the Node.js service, which can easily connect to DigitalOcean Managed Databases for Redis.Environment Variables: Securely manage sensitive information (e.g., Redis connection strings, OAuth secrets) using DigitalOcean environment variables.CI/CD: Set up a Continuous Integration/Continuous Deployment pipeline (e.g., GitHub Actions, GitLab CI) to automate testing and deployment.Monitoring & Logging: Integrate with monitoring tools (e.g., DigitalOcean's built-in monitoring, Prometheus/Grafana) and a centralized logging solution.This plan provides a structured approach to building your Node.js service application, ensuring a robust, maintainable, and scalable backend for your CMS.
